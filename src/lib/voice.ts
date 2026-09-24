@@ -17,9 +17,45 @@ export function canSpeak() {
   return isNative || (typeof window !== "undefined" && "speechSynthesis" in window)
 }
 
-function pickSpanishVoice(): SpeechSynthesisVoice | undefined {
-  const voices = window.speechSynthesis.getVoices()
-  return voices.find((v) => v.lang === LANG) ?? voices.find((v) => v.lang.startsWith("es"))
+/* ---------- Selección de voz (web) ---------- */
+
+let voicesPromise: Promise<SpeechSynthesisVoice[]> | null = null
+
+/** Las voces cargan de forma asíncrona: espera a que estén listas. */
+function loadVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (voicesPromise) return voicesPromise
+  voicesPromise = new Promise<SpeechSynthesisVoice[]>((resolve) => {
+    const synth = window.speechSynthesis
+    const now = synth.getVoices()
+    if (now.length) return resolve(now)
+    const done = () => resolve(synth.getVoices())
+    synth.addEventListener("voiceschanged", done, { once: true })
+    setTimeout(done, 1500)
+  }).then((v) => {
+    if (!v.length) voicesPromise = null // reintentar la próxima vez
+    return v
+  })
+  return voicesPromise
+}
+
+/** Más puntos = voz más natural. */
+function scoreVoice(v: SpeechSynthesisVoice) {
+  const name = v.name.toLowerCase()
+  let s = 0
+  if (/natural|neural/.test(name)) s += 100 // voces neuronales (Edge)
+  else if (name.includes("online")) s += 80
+  else if (name.includes("google")) s += 50 // voces en línea de Chrome
+  if (v.lang === "es-MX") s += 30
+  else if (v.lang === "es-US" || v.lang === "es-419") s += 20
+  else if (v.lang === "es-ES") s += 10
+  return s
+}
+
+async function pickSpanishVoice(): Promise<SpeechSynthesisVoice | undefined> {
+  const voices = (await loadVoices()).filter((v) => v.lang.toLowerCase().startsWith("es"))
+  // Para forzar una voz en pruebas: localStorage.setItem("iarecuerdo:voz", "Nombre exacto")
+  const forced = localStorage.getItem("iarecuerdo:voz")
+  return voices.find((v) => v.name === forced) ?? voices.sort((a, b) => scoreVoice(b) - scoreVoice(a))[0]
 }
 
 export async function speak(text: string, { rate = 0.9 }: { rate?: number } = {}) {
@@ -32,10 +68,10 @@ export async function speak(text: string, { rate = 0.9 }: { rate?: number } = {}
   const synth = window.speechSynthesis
   synth.cancel()
   const u = new SpeechSynthesisUtterance(text)
-  u.lang = LANG
-  u.rate = rate
-  const voice = pickSpanishVoice()
+  const voice = await pickSpanishVoice()
   if (voice) u.voice = voice
+  u.lang = voice?.lang ?? LANG
+  u.rate = rate
   await new Promise<void>((resolve, reject) => {
     u.onend = () => resolve()
     u.onerror = (e) => (e.error === "interrupted" || e.error === "canceled" ? resolve() : reject(e))
@@ -87,7 +123,7 @@ export async function listenOnce(): Promise<string> {
   }
 
   const Ctor = getWebRecognition()
-  if (!Ctor) throw new Error("Este navegador no puede escuchar. Prueba en Chrome o escribe el aviso.")
+  if (!Ctor) throw new Error("Este navegador no puede escuchar. Prueba en Chrome o Edge, o escribe el aviso.")
   const rec = new Ctor()
   rec.lang = LANG
   rec.interimResults = false
