@@ -6,9 +6,13 @@ import { Switch } from "@/components/ui/switch"
 import { ScreenHeader } from "@/components/screen-header"
 import { SpeakButton } from "@/components/speak-button"
 import { formatToday, formatWhen } from "@/lib/format"
-import { userName, type Reminder } from "@/data/demo"
+import { VoiceCommand } from "@/components/voice-command"
+import { normalize } from "@/lib/reminders"
+import { type Reminder } from "@/data/demo"
 
 type Props = {
+  userName: string
+  onSettings: () => void
   next?: Reminder
   pendingCount: number
   dailyQuestion: boolean
@@ -18,12 +22,13 @@ type Props = {
   onList: () => void
 }
 
-export function HomeScreen({ next, pendingCount, dailyQuestion, onDailyQuestion, onNewReminder, onGuide, onList }: Props) {
+export function HomeScreen({ userName, onSettings, next, pendingCount, dailyQuestion, onDailyQuestion, onNewReminder, onGuide, onList }: Props) {
   return (
     <div className="flex flex-col gap-7">
       <ScreenHeader helpText="Toca el botón verde de arriba para decir un aviso con tu voz. Toca el de abajo para seguir aprendiendo donde te quedaste." />
 
       <section>
+        <p className="mb-2 text-xl font-semibold">IA-Recuerdo</p>
         <h1 className="text-5xl font-bold tracking-tight">Hola, {userName}</h1>
         <p className="mt-1 text-xl text-muted-foreground">{formatToday()}</p>
       </section>
@@ -49,16 +54,25 @@ export function HomeScreen({ next, pendingCount, dailyQuestion, onDailyQuestion,
           <span className="grid size-13 shrink-0 place-items-center rounded-full border-2 border-accion-borde bg-card">
             <BookOpen />
           </span>
-          Continuar mi guía
+          Mis guías
         </Button>
         <Button variant="link" className="self-start px-0 text-xl" onClick={onList}>
           Ver mis avisos ({pendingCount}) <ChevronRight />
         </Button>
       </section>
 
+      <VoiceCommand hint="Di crear aviso, mis avisos, mis guías o mi perfil." onCommand={text => {
+        const command = normalize(text)
+        if (["crear aviso", "nuevo aviso", "decir un aviso"].includes(command)) onNewReminder()
+        else if (command === "mis avisos") onList()
+        else if (command === "mis guias") onGuide()
+        else if (command === "mi perfil") onSettings()
+        else throw new Error("Di crear aviso, mis avisos, mis guías o mi perfil.")
+      }} />
+      <Button variant="outline" onClick={onSettings}>Mi perfil y tutor</Button>
       <Card className="flex-row items-center justify-between gap-4">
         <Label htmlFor="daily" className="text-lg leading-snug font-normal">
-          Preguntarme cada mañana:
+          Preguntarme al entrar, una vez al día:
           <br />
           <strong>“¿Algo que recordar hoy?”</strong>
         </Label>

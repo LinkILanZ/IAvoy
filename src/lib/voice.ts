@@ -10,6 +10,11 @@ import { SpeechRecognition } from "@capacitor-community/speech-recognition"
 
 const LANG = "es-MX"
 const isNative = Capacitor.isNativePlatform()
+let activeRecognition: WebRecognition | undefined
+export async function stopListening() {
+  if (isNative) await SpeechRecognition.stop()
+  else activeRecognition?.stop()
+}
 
 /* ---------- Texto a voz ---------- */
 
@@ -125,6 +130,7 @@ export async function listenOnce(): Promise<string> {
   const Ctor = getWebRecognition()
   if (!Ctor) throw new Error("Este navegador no puede escuchar. Prueba en Chrome o Edge, o escribe el aviso.")
   const rec = new Ctor()
+  activeRecognition = rec
   rec.lang = LANG
   rec.interimResults = false
   rec.maxAlternatives = 1
@@ -135,7 +141,8 @@ export async function listenOnce(): Promise<string> {
     }
     rec.onerror = (e) =>
       reject(new Error(e.error === "not-allowed" ? "Hace falta permiso para usar el micrófono." : "No se escuchó bien. Intenta otra vez."))
-    rec.onend = () => resolve(text)
+    const timeout = setTimeout(() => { rec.stop(); reject(new Error("Se agotó el tiempo de escucha. Inténtalo otra vez.")) }, 20000)
+    rec.onend = () => { clearTimeout(timeout); activeRecognition = undefined; resolve(text) }
     rec.start()
   })
 }

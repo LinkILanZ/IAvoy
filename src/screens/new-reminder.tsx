@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { Check, Mic, Square } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -8,130 +7,87 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { ScreenHeader } from "@/components/screen-header"
 import { SpeakButton } from "@/components/speak-button"
-import { canListen, listenOnce } from "@/lib/voice"
+import { VoiceCommand } from "@/components/voice-command"
+import { durationMinutes, localDateInput, normalize, numbers, parseSpokenDate } from "@/lib/reminders"
 import { formatWhen } from "@/lib/format"
-import { cn } from "@/lib/utils"
+import type { Reminder } from "@/data/demo"
 
-type Props = { onCancel: () => void; onSave: (text: string, whenIso: string) => void }
-type Day = "hoy" | "manana"
-
-function buildDate(day: Day, time: string) {
-  const [h, m] = time.split(":").map(Number)
-  const d = new Date()
-  if (day === "manana") d.setDate(d.getDate() + 1)
-  d.setHours(h, m, 0, 0)
-  return d.toISOString()
-}
-const nextHour = () => `${String((new Date().getHours() + 1) % 24).padStart(2, "0")}:00`
-
-export function NewReminderScreen({ onCancel, onSave }: Props) {
+type Props = { initial?: Reminder; onCancel: () => void; onSave: (reminder: Reminder) => void }
+export function NewReminderScreen({ initial, onCancel, onSave }: Props) {
   const [step, setStep] = useState<"dictar" | "confirmar">("dictar")
-  const [text, setText] = useState("")
-  const [listening, setListening] = useState(false)
-  const [day, setDay] = useState<Day>("hoy")
-  const [time, setTime] = useState(nextHour)
-  const [inOneMinute, setInOneMinute] = useState(false)
-  const voiceOk = canListen()
-
-  async function dictate() {
-    if (listening) return
-    setListening(true)
-    try {
-      const heard = await listenOnce()
-      if (heard) setText(heard.charAt(0).toUpperCase() + heard.slice(1))
-      else toast("No escuché nada. Toca el micrófono otra vez.")
-    } catch (e) {
-      toast.error((e as Error).message)
-    } finally {
-      setListening(false)
+  const [text, setText] = useState(initial?.text ?? "")
+  const [date, setDate] = useState(() => localDateInput(initial ? new Date(initial.when) : new Date(Date.now() + 3600000)))
+  const [advance, setAdvance] = useState(initial?.advanceMinutes ?? 0)
+  const [recurrence, setRecurrence] = useState<NonNullable<Reminder["recurrence"]>>(initial?.recurrence ?? "once")
+  const [repeats, setRepeats] = useState(initial?.repeats ?? 3)
+  const [snooze, setSnooze] = useState(initial?.snoozeMinutes ?? 10)
+  const [confirmCancel, setConfirmCancel] = useState(false)
+  const parsed = new Date(date)
+  const valid = Number.isFinite(parsed.getTime()) && parsed.getTime() > Date.now()
+  const summary = `${text || "Tu aviso"}. ${valid ? formatWhen(parsed.toISOString()) : "Elige una fecha futura"}. ${advance ? `También avisaré ${advance} minutos antes` : "Sin anticipación"}. ${recurrence === "daily" ? "Todos los días" : recurrence === "weekly" ? "Cada semana" : "Una sola fecha"}. Repetiré el mensaje ${repeats} veces, cada 30 segundos, mientras la aplicación esté abierta.`
+  function save() {
+    if (!text.trim() || !valid || parsed.getTime() <= Date.now() || !Number.isInteger(advance) || advance < 0 || advance > 10080 || !Number.isInteger(snooze) || snooze < 1 || snooze > 10080) {
+      toast.error("Revisa el texto, la fecha futura y los minutos (máximo 10080).")
+      return
     }
+    onSave({ id: initial?.id ?? crypto.randomUUID(), text: text.trim(), when: parsed.toISOString(), done: false, advanceMinutes: advance, recurrence, repeats, repeatSeconds: 30, snoozeMinutes: snooze })
   }
-
-  const whenIso = inOneMinute ? new Date(Date.now() + 60_000).toISOString() : buildDate(day, time)
-  const summary = `Te avisaré ${formatWhen(whenIso).toLowerCase()}: ${text}`
-
-  if (step === "dictar") {
-    return (
-      <div className="flex flex-col gap-7">
-        <ScreenHeader onBack={onCancel} helpText="Toca el círculo verde y di lo que quieres recordar. Por ejemplo: llamar al médico. Luego toca Siguiente." />
-        <section>
-          <h1 className="text-4xl font-bold">Di tu aviso</h1>
-          <p className="mt-2 text-xl">
-            {voiceOk ? "Toca el micrófono y habla. Por ejemplo: “llamar al médico”." : "Escribe lo que quieres recordar."}
-          </p>
-        </section>
-
-        {voiceOk && (
-          <div className="flex flex-col items-center gap-3">
-            <button
-              type="button"
-              onClick={dictate}
-              aria-label={listening ? "Escuchando" : "Tocar para hablar"}
-              className={cn(
-                "grid size-44 place-items-center rounded-full border-4 border-accion-borde bg-accion transition-transform active:scale-95",
-                listening && "animate-pulse"
-              )}
-            >
-              {listening ? <Square className="size-16" /> : <Mic className="size-20" />}
-            </button>
-            <p className="text-2xl font-semibold" aria-live="polite">
-              {listening ? "Te escucho…" : "Tocar para hablar"}
-            </p>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="aviso">{voiceOk ? "Así lo entendí (puedes corregirlo):" : "Tu aviso:"}</Label>
-          <Textarea id="aviso" value={text} onChange={(e) => setText(e.target.value)} placeholder="Llamar al médico" />
-        </div>
-
-        <Button size="xl" className="justify-center" disabled={!text.trim()} onClick={() => setStep("confirmar")}>
-          Siguiente
-        </Button>
-      </div>
-    )
+  function command(raw: string) {
+    const s = normalize(raw)
+    if (s === "cancelar" || s === "salir") { setConfirmCancel(true); return }
+    if (confirmCancel) {
+      if (s === "si" || s === "si salir") onCancel()
+      else if (s === "no" || s === "continuar") setConfirmCancel(false)
+      else throw new Error("Di sí para salir sin guardar, o no para continuar.")
+      return
+    }
+    if (s === "siguiente" || s === "confirmar") { if (text.trim()) setStep("confirmar"); else throw new Error("Primero di el contenido del aviso."); return }
+    if (s === "guardar" || s === "guardar aviso" || s === "si guardar") {
+      if (step !== "confirmar") { setStep("confirmar"); toast("Revisa el resumen y vuelve a decir guardar."); return }
+      save(); return
+    }
+    if (s === "atras") { setStep("dictar"); return }
+    if (s === "sin anticipacion" || s === "a la hora exacta") { setAdvance(0); return }
+    if (s.includes("antes") || s.includes("anticipacion")) {
+      const minutes = durationMinutes(s)
+      if (minutes === null) throw new Error("Di: avísame quince minutos antes, o sin anticipación.")
+      setAdvance(minutes); return
+    }
+    if (s.startsWith("posponer")) { const minutes = durationMinutes(s); if (!minutes) throw new Error("Di: posponer diez minutos."); setSnooze(minutes); return }
+    if (s === "todos los dias" || s === "cada dia") { setRecurrence("daily"); return }
+    if (s === "cada semana") { setRecurrence("weekly"); return }
+    if (s === "una sola vez") { setRecurrence("once"); return }
+    const count = numbers(s).match(/^repetir ([1-5]) veces?$/)
+    if (count) { setRepeats(Number(count[1])); return }
+    const datePhrase = s.replace(/^(?:cambiar fecha a|cambiar hora a|fecha|hora) /, "")
+    if (/^(hoy|manana|pasado manana|en |dentro de)/.test(datePhrase)) { setDate(localDateInput(parseSpokenDate(datePhrase))); return }
+    if (/^(texto|cambiar texto a) /.test(s)) { setText(raw.replace(/^(texto|cambiar texto a) /i, "")); return }
+    if (step === "dictar") { setText(raw); return }
+    throw new Error("No cambié el aviso. Di una fecha, anticipación, guardar o atrás.")
   }
-
-  return (
-    <div className="flex flex-col gap-7">
-      <ScreenHeader onBack={() => setStep("dictar")} helpText="Elige si el aviso es hoy o mañana y la hora. Después toca Guardar aviso." />
-      <section>
-        <h1 className="text-4xl font-bold">¿Cuándo te aviso?</h1>
-        <p className="mt-2 text-xl">Revisa el día y la hora.</p>
-      </section>
-
-      <div className="grid grid-cols-2 gap-3" role="group" aria-label="Día">
-        {(["hoy", "manana"] as const).map((d) => (
-          <Button
-            key={d}
-            variant={day === d && !inOneMinute ? "default" : "outline"}
-            aria-pressed={day === d && !inOneMinute}
-            className="min-h-20 text-2xl"
-            onClick={() => { setDay(d); setInOneMinute(false) }}
-          >
-            {day === d && !inOneMinute && <Check />}
-            {d === "hoy" ? "Hoy" : "Mañana"}
-          </Button>
-        ))}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="hora">Hora</Label>
-        <Input id="hora" type="time" value={time} className="min-h-20 text-3xl" onChange={(e) => { setTime(e.target.value); setInOneMinute(false) }} />
-      </div>
-
-      <Button variant={inOneMinute ? "default" : "outline"} aria-pressed={inOneMinute} className="self-start" size="sm" onClick={() => setInOneMinute((v) => !v)}>
-        {inOneMinute && <Check />} Probar: avisarme en 1 minuto
-      </Button>
-
-      <Card className="gap-3">
-        <p className="text-xl leading-snug">{summary}</p>
-        <SpeakButton text={summary} className="self-start" />
-      </Card>
-
-      <Button size="xl" className="justify-center" onClick={() => onSave(text.trim(), whenIso)}>
-        <Check /> Guardar aviso
-      </Button>
-    </div>
-  )
+  return <div className="flex flex-col gap-6">
+    <ScreenHeader onBack={() => step === "confirmar" ? setStep("dictar") : setConfirmCancel(true)} helpText="Dicta primero el contenido. Después indica fecha y anticipación. Revisa el resumen antes de guardar." />
+    <h1 className="text-4xl font-bold">{initial ? "Modificar aviso" : "Crear un aviso"}</h1>
+    <VoiceCommand onCommand={command} hint={step === "dictar" ? 'Di el contenido, por ejemplo “Llamar a mi hija”. Después di “siguiente”.' : 'Di “mañana a las diez de la mañana”, “quince minutos antes”, “sin anticipación” o “guardar”.'} />
+    {confirmCancel && <Card role="alert"><p>¿Salir sin guardar los cambios? Puedes decir sí o no.</p><Button onClick={onCancel}>Sí, salir</Button><Button variant="outline" onClick={() => setConfirmCancel(false)}>No, continuar</Button></Card>}
+    {step === "dictar" ? <>
+      <Label htmlFor="aviso">Contenido del aviso</Label>
+      <Textarea id="aviso" value={text} onChange={e => setText(e.target.value)} placeholder="Llamar a mi hija" />
+      <Button size="xl" disabled={!text.trim()} onClick={() => setStep("confirmar")}>Siguiente</Button>
+    </> : <>
+      <Label htmlFor="fecha">Fecha y hora</Label>
+      <Input id="fecha" type="datetime-local" value={date} onChange={e => setDate(e.target.value)} />
+      {!valid && <p role="alert">Elige una fecha y hora futuras.</p>}
+      <Button variant="outline" onClick={() => setDate(localDateInput(new Date(Date.now() + 120000)))}>Probar: avisarme en aproximadamente 2 minutos</Button>
+      <Label htmlFor="anticipacion">Minutos de anticipación (0 = hora exacta)</Label>
+      <Input id="anticipacion" type="number" min="0" max="10080" value={advance} onChange={e => setAdvance(Number(e.target.value))} />
+      <Label htmlFor="frecuencia">Frecuencia</Label>
+      <select id="frecuencia" className="min-h-14 rounded-xl border-2 bg-card p-3" value={recurrence} onChange={e => setRecurrence(e.target.value as typeof recurrence)}><option value="once">Una sola vez</option><option value="daily">Todos los días</option><option value="weekly">Cada semana</option></select>
+      <Label htmlFor="repeticiones">Repeticiones de voz, cada 30 segundos</Label>
+      <select id="repeticiones" className="min-h-14 rounded-xl border-2 bg-card p-3" value={repeats} onChange={e => setRepeats(Number(e.target.value))}>{[1,2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}</select>
+      <Label htmlFor="posponer">Minutos al elegir Más tarde</Label><Input id="posponer" type="number" min="1" max="10080" value={snooze} onChange={e => setSnooze(Number(e.target.value))} />
+      <Card><p>{summary}</p><SpeakButton text={summary} /></Card>
+      <Button size="xl" disabled={!valid} onClick={save}>Guardar aviso</Button>
+    </>}
+  </div>
 }
